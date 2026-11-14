@@ -1,0 +1,115 @@
+package pl.escrebind;
+
+import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
+import net.fabricmc.fabric.api.client.screen.v1.ScreenKeyboardEvents;
+import net.minecraft.client.option.KeyBinding;
+import net.minecraft.client.gui.screen.GameMenuScreen;
+import net.minecraft.client.util.InputUtil;
+import org.lwjgl.glfw.GLFW;
+
+public class EscRebindClient implements ClientModInitializer {
+    /** Klawisz otwierający menu pauzy. Domyślnie Esc, zmieniasz w Ustawienia -> Sterowanie. */
+    public static KeyBinding PAUSE_KEY;
+
+    @Override
+    public void onInitializeClient() {
+        PAUSE_KEY = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+                "key.escrebind.pause",
+                InputUtil.Type.KEYSYM,
+                GLFW.GLFW_KEY_ESCAPE,
+                "key.categories.escrebind"
+        ));
+
+        // W grze: wybrany klawisz otwiera menu pauzy.
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            while (PAUSE_KEY.wasPressed()) {
+                if (client.currentScreen == null && client.world != null) {
+                    client.openGameMenu(false);
+                }
+            }
+        });
+
+        // W menu pauzy: wybrany klawisz je zamyka.
+        ScreenEvents.AFTER_INIT.register((client, screen, w, h) -> {
+            if (screen instanceof GameMenuScreen) {
+                ScreenKeyboardEvents.allowKeyPress(screen).register((s, key, scancode, modifiers) -> {
+                    if (PAUSE_KEY.matchesKey(key, scancode)) {
+                        s.close();
+                        return false;
+                    }
+                    return true;
+                });
+            }
+        });
+    }
+}
+
+package pl.escrebind.mixin;
+
+import net.minecraft.client.Keyboard;
+import net.minecraft.client.MinecraftClient;
+import org.lwjgl.glfw.GLFW;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import pl.escrebind.EscRebindClient;
+
+@Mixin(Keyboard.class)
+public class KeyboardMixin {
+    /**
+     * W grze (bez otwartego ekranu) Esc nie otwiera już menu pauzy,
+     * chyba że sam Esc jest przypisany jako klawisz pauzy.
+     */
+    @Inject(method = "onKey", at = @At("HEAD"), cancellable = true)
+    private void escrebind$blockEsc(long window, int key, int scancode, int action, int modifiers, CallbackInfo ci) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (window != client.getWindow().getHandle()) return;
+        if (key != GLFW.GLFW_KEY_ESCAPE) return;
+        if (client.currentScreen != null || client.world == null) return;
+        if (EscRebindClient.PAUSE_KEY != null && EscRebindClient.PAUSE_KEY.matchesKey(key, scancode)) return;
+        ci.cancel();
+    }
+}
+
+{
+  "key.escrebind.pause": "Open pause menu",
+  "key.categories.escrebind": "Esc Rebind"
+}
+
+{
+  "key.escrebind.pause": "Otwórz menu pauzy",
+  "key.categories.escrebind": "Esc Rebind"
+}
+
+{
+  "required": true,
+  "package": "pl.escrebind.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": ["KeyboardMixin"],
+  "injectors": { "defaultRequire": 1 }
+}
+
+{
+  "schemaVersion": 1,
+  "id": "escrebind",
+  "version": "${version}",
+  "name": "Esc Rebind",
+  "description": "Pozwala przypisać otwieranie menu pauzy pod wybrany klawisz zamiast Esc.",
+  "authors": ["you"],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["pl.escrebind.EscRebindClient"]
+  },
+  "mixins": ["escrebind.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.4",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
